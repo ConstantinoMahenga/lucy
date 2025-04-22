@@ -11,23 +11,28 @@ class PhotoController extends Controller
     public function upload(Request $request)
     {
         $request->validate([
-            'photo' => 'required|image|max:2048',
+            'photos' => 'required|array',
+            'photos.*' => 'image|max:2048',
         ]);
-
-        $path = $request->file('photo')->store('user_photos', 'public');
-
-        $photo = Photo::create([
-            'user_id' => $request->user()->id,
-            'path' => $path,
-        ]);
-
+    
+        $user = $request->user();
+        $uploaded = [];
+    
+        foreach ($request->file('photos') as $photo) {
+            $path = $photo->store('user_photos', 'public');
+    
+            $uploaded[] = Photo::create([
+                'user_id' => $user->id,
+                'path' => $path,
+            ]);
+        }
+    
         return response()->json([
-            'message' => 'Foto enviada com sucesso.',
-            'photo' => $photo,
-            'url' => asset('storage/' . $path),
+            'message' => 'Fotos enviadas com sucesso.',
+            'photos' => $uploaded,
         ]);
     }
-
+    
     public function setAsMain($id)
     {
         $user = auth()->user();
