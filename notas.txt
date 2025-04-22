@@ -1,0 +1,170 @@
+funcionalidades (cadastro, mostrar pessoas mais proximas de ti, mostrar pessoas mais proximas com caracteristicas e interesses em comun,
+rejeitar o perfil, gostar, chamar para amizade, mandar mensagem sem iniciar um chat"atraves daqueles botoes rejeitar,..."), outras
+funcionalidades procurar pessoas proximas que desejam( relacionamento serio, casual, amizade) e ver quem gostou de ti,
+correspondencia(quando duas pessoas se gostam em simultaneo) e iniciar uma conversa atraves do chat 
+
+Diagrama de classes
+classDiagram
+    class User {
+        +int id (PK)
+        +string name
+        +string email
+        -string password_hash
+        +date birth_date
+        +string gender
+        +int height
+        +string pets
+        +string job
+        +string education
+        +string drinking_habit
+        +string smoking_habit
+        +string workout_habit
+        +text music_tastes
+        +text bio
+        +string search_goal
+        +string sexual_orientation
+        +string interested_in_gender
+        +Point location  // Ou float latitude, float longitude
+        +timestamp last_seen_at
+        +bool is_premium
+        +timestamp premium_expires_at
+        +string profile_picture_url
+        +int age_min_preference
+        +int age_max_preference
+        +int max_distance_preference
+        +timestamp created_at
+        +timestamp updated_at
+        +photos() : HasMany~Photo~
+        +interests() : BelongsToMany~Interest~
+        +initiatedInteractions() : HasMany~Interaction~ (user_id)
+        +receivedInteractions() : HasMany~Interaction~ (interacted_user_id)
+        +matches() : Collection // (via user_one_id or user_two_id)
+        +conversations() : BelongsToMany~Conversation~
+        +sentMessages() : HasMany~Message~ (sender_id)
+    }
+
+    class Photo {
+        +int id (PK)
+        +int user_id (FK)
+        +string url
+        +int order
+        +timestamp created_at
+        +timestamp updated_at
+        +user() : BelongsTo~User~
+    }
+
+    class Interest {
+        +int id (PK)
+        +string name
+        +users() : BelongsToMany~User~
+    }
+
+    class Interaction {
+        +int id (PK)
+        +int user_id (FK)
+        +int interacted_user_id (FK)
+        +string type // 'like', 'dislike', 'friend_request', 'quick_message'
+        +text message
+        +timestamp created_at
+        +timestamp updated_at
+        +initiator() : BelongsTo~User~ (user_id)
+        +target() : BelongsTo~User~ (interacted_user_id)
+    }
+
+    class Match {
+        +int id (PK)
+        +int user_one_id (FK)
+        +int user_two_id (FK)
+        +timestamp created_at
+        +timestamp updated_at
+        +userOne() : BelongsTo~User~
+        +userTwo() : BelongsTo~User~
+        +conversation() : HasOne~Conversation~ (optional)
+    }
+
+    class Conversation {
+        +int id (PK)
+        +int match_id (FK, nullable)
+        +int last_message_id (FK, nullable)
+        +timestamp created_at
+        +timestamp updated_at
+        +participants() : BelongsToMany~User~
+        +messages() : HasMany~Message~
+        +match() : BelongsTo~Match~ (optional)
+        +lastMessage() : BelongsTo~Message~ (optional)
+    }
+
+    class Message {
+        +int id (PK)
+        +int conversation_id (FK)
+        +int sender_id (FK)
+        +text content
+        +string type // 'text', 'image', etc.
+        +timestamp created_at
+        +timestamp updated_at
+        +conversation() : BelongsTo~Conversation~
+        +sender() : BelongsTo~User~
+    }
+
+    User "1" -- "*" Photo : has
+    User "*" -- "*" Interest : has (via pivot)
+    User "1" -- "*" Interaction : initiates (user_id)
+    User "1" -- "*" Interaction : receives (interacted_user_id)
+    User "2" -- "1..*" Match : involved in
+    User "*" -- "*" Conversation : participates in (via pivot)
+    User "1" -- "*" Message : sends (sender_id)
+    Match "1" -- "0..1" Conversation : leads to
+    Conversation "1" -- "*" Message : contains
+    Conversation "1" -- "0..1" Message : has last (last_message_id)
+
+    %% Controllers (Showing Dependencies)
+    class AuthController {
+        +register(Request)
+        +login(Request)
+        +logout(Request)
+        +user(Request)
+    }
+    class ProfileController {
+       +showMe(Request)
+       +updateMe(Request)
+       +uploadPhoto(Request)
+       +deletePhoto(Photo, Request)
+    }
+    class DiscoveryController {
+        +getProfiles(Request)
+        +searchByGoal(Request)
+    }
+    class InteractionController{
+        +store(Request)
+        +whoLikedMe(Request)
+    }
+    class MatchController{
+        +index(Request)
+    }
+    class ConversationController{
+        +index(Request)
+        +showMessages(Conversation, Request)
+        +sendMessage(Conversation, Request)
+    }
+    class SubscriptionController{
+        +status(Request)
+    }
+
+    AuthController ..> User
+    ProfileController ..> User
+    ProfileController ..> Photo
+    DiscoveryController ..> User
+    DiscoveryController ..> Interaction
+    DiscoveryController ..> Match
+    InteractionController ..> User
+    InteractionController ..> Interaction
+    InteractionController ..> Match
+    MatchController ..> User
+    MatchController ..> Match
+    ConversationController ..> User
+    ConversationController ..> Conversation
+    ConversationController ..> Message
+    SubscriptionController ..> User
+
+
+   "43|7lIMONUKzwaH1njG3tyWKP8dJajrSfd0QPkOoQgmd6490aec"
