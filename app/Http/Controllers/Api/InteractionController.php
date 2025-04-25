@@ -1,153 +1,155 @@
 <?php
 
-namespace App\Http\Controllers\Api; // Ajuste se não usar subdiretório Api
+namespace App\Http\Controllers\Api; // Ou App\Http\Controllers
 
 use App\Http\Controllers\Controller;
 use App\Models\Interaction;
-use App\Models\UserMatch ;
+use App\Models\UserMatch;
 use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth; // Para pegar o usuário logado
-use Illuminate\Validation\Rule; // Para validar o tipo de interação
-use App\Http\Resources\UserResource; // Para retornar quem curtiu
-use Illuminate\Support\Facades\DB; // Para transação no match
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\Rule;
+use App\Http\Resources\UserResource;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-
 
 class InteractionController extends Controller
 {
     /**
-     * Armazena uma nova interação (like, dislike, etc.).
+     * Armazena uma nova interação (like, dislike, quick_message, etc.).
      * Verifica se ocorreu um match em caso de 'like'.
+     * Permite 'quick_message' apenas para usuários Premium.
      */
     public function store(Request $request)
     {
-        $user = $request->user(); // Usuário autenticado (quem está agindo)
+        $user = $request->user(); // Usuário autenticado
 
-        // Validação dos dados recebidos
+        // Tipos de interação permitidos (ajuste conforme necessário)
+        $allowedInteractionTypes = [
+            Interaction::TYPE_LIKE,
+            Interaction::TYPE_DISLIKE,
+            Interaction::TYPE_QUICK_MESSAGE,
+            Interaction::TYPE_FRIEND_REQUEST, // Se implementado
+            // Interaction::TYPE_BLOCK, // Se implementado
+        ];
+
+        // Validação
         $validated = $request->validate([
-            'interacted_user_id' => [
-                'required',
-                'integer',
-                'exists:users,id', // Garante que o usuário alvo existe
-                Rule::notIn([$user->id]), // Não pode interagir consigo mesmo
-            ],
-            'type' => [
-                'required',
-                'string',
-                // Valida se o tipo é um dos permitidos no Model Interaction
-                Rule::in([
-                    Interaction::TYPE_LIKE,
-                    Interaction::TYPE_DISLIKE,
-                    Interaction::TYPE_QUICK_MESSAGE, // Adicione outros tipos aqui se implementados
-                    // Interaction::TYPE_FRIEND_REQUEST,
-                    // Interaction::TYPE_BLOCK,
-                ])
-            ],
-            // Mensagem é obrigatória apenas se o tipo for 'quick_message'
+            'interacted_user_id' => ['required', 'integer', 'exists:users,id', Rule::notIn([$user->id])],
+            'type' => ['required', 'string', Rule::in($allowedInteractionTypes)],
             'message' => [
                 Rule::requiredIf(fn () => $request->input('type') === Interaction::TYPE_QUICK_MESSAGE),
-                'nullable', // Permite ser nulo para outros tipos
-                'string',
-                'max:255' // Limite de caracteres para mensagem rápida
+                'nullable', 'string', 'max:255'
             ],
         ]);
 
         $interactedUserId = $validated['interacted_user_id'];
         $interactionType = $validated['type'];
 
-        // --- Lógica Principal ---
-        // Usar updateOrCreate para evitar interações duplicadas do mesmo tipo
-        // (Ex: usuário não pode dar like duas vezes seguidas sem remover o like)
-        // Ou simplesmente criar, dependendo da regra de negócio. Vamos usar updateOrCreate.
+        // --- VERIFICAÇÃO PREMIUM PARA QUICK MESSAGE ---
+        if ($interactionType === Interaction::TYPE_QUICK_MESSAGE && !$user->is_premium) {
+            return response()->json([
+                'success' => false, // Adicionado para clareza
+                'message' => 'Apenas usuários Premium podem enviar mensagens rápidas.',
+                'requires_premium' => true // Flag opcional para o frontend
+            ], 403); // 403 Forbidden
+        }
+        // --- FIM DA VERIFICAÇÃO ---
+
+        // --- Lógica Principal (updateOrCreate ou create) ---
         $interaction = Interaction::updateOrCreate(
             [
                 'user_id' => $user->id,
                 'interacted_user_id' => $interactedUserId,
+                // Considerar o 'type' na busca se um usuário puder ter MÚLTIPLOS tipos
+                // de interação com outro (ex: like E mensagem rápida). Se for só UM tipo
+                // por vez (like OU dislike OU msg), a busca atual está OK.
+                // Se múltiplos tipos são possíveis, adicione 'type' aqui:
+                // 'type' => $interactionType
             ],
-            [
-                'type' => $interactionType,
-                'message' => $validated['message'] ?? null, // Salva a mensagem se houver
+            [   // Dados para atualizar ou criar:
+                'type' => $interactionType, // Sempre atualiza o tipo para o mais recente
+                'message' => ($interactionType === Interaction::TYPE_QUICK_MESSAGE) ? ($validated['message'] ?? null) : null, // Só salva msg se for quick_message
             ]
         );
 
         $matchOccurred = false;
 
-        // --- Verificar Match se for um Like ---
+        // Verificar Match se for um Like
         if ($interactionType === Interaction::TYPE_LIKE) {
-            // Verificar se o outro usuário JÁ deu like neste usuário
-            $mutualLikeExists = Interaction::where('user_id', $interactedUserId) // Quem recebeu agora é o iniciador
-                                           ->where('interacted_user_id', $user->id) // O usuário atual é o alvo
+            $mutualLikeExists = Interaction::where('user_id', $interactedUserId)
+                                           ->where('interacted_user_id', $user->id)
                                            ->where('type', Interaction::TYPE_LIKE)
                                            ->exists();
 
             if ($mutualLikeExists) {
-                // --- MATCH!!! ---
                 $matchOccurred = true;
-
-                // Usar transação para garantir que o match seja criado ou nada aconteça
                 DB::transaction(function () use ($user, $interactedUserId) {
-                     // Criar o match (evitar duplicados)
-                     // Ordem dos IDs não importa para a busca, mas pode importar para consistência
-                    $user1Id = min($user->id, $interactedUserId);
-                    $user2Id = max($user->id, $interactedUserId);
-
-                    UserMatch::firstOrCreate(
-                        ['user_one_id' => $user1Id, 'user_two_id' => $user2Id]
-                        // Não precisa passar dados extras aqui, apenas cria se não existir
-                    );
-
-                    // TODO: Disparar Eventos / Notificações para ambos usuários sobre o Match!
-                    // event(new MatchOccurred($user, User::find($interactedUserId)));
-                    // Enviar Push Notification, etc.
+                    UserMatch::firstOrCreate([
+                        'user_one_id' => min($user->id, $interactedUserId),
+                        'user_two_id' => max($user->id, $interactedUserId)
+                    ]);
+                    // TODO: Disparar eventos/notificações
                 });
-
-
-                Log::info("Match ocorrido entre User {$user->id} e User {$interactedUserId}"); // Log para debug
+                Log::info("Match ocorrido entre User {$user->id} e User {$interactedUserId}");
             }
         }
 
-        // TODO: Implementar lógica para outros tipos ('dislike' apenas grava, 'quick_message' pode notificar, etc.)
+        // TODO: Lógica adicional para quick_message (ex: Notificação para o destinatário)
+        if ($interactionType === Interaction::TYPE_QUICK_MESSAGE) {
+            // Exemplo: User::find($interactedUserId)->notify(new QuickMessageReceived($user, $interaction->message));
+            Log::info("Quick Message enviada por User {$user->id} para User {$interactedUserId}");
+        }
 
-        // --- Resposta ---
+        // Resposta
         return response()->json([
+            'success' => true, // Adicionado para clareza
             'message' => 'Interação registrada com sucesso.',
             'interaction_type' => $interactionType,
-            'match_occurred' => $matchOccurred, // Informa o frontend se deu match
-        ], 201); // 201 Created (ou 200 OK se for update)
+            'match_occurred' => $matchOccurred,
+        ], $interaction->wasRecentlyCreated ? 201 : 200); // 201 se foi criada, 200 se atualizada
     }
 
     /**
      * Retorna a lista de usuários que deram 'like' no usuário autenticado.
-     * (Pode exigir assinatura Premium).
+     * REQUER ASSINATURA PREMIUM.
      */
     public function whoLikedMe(Request $request)
     {
         $user = $request->user();
 
-        // --- Lógica de Assinatura (Exemplo) ---
-        // if (!$user->is_premium) {
-        //     return response()->json(['message' => 'Funcionalidade exclusiva para usuários Premium.'], 403); // 403 Forbidden
-        // }
-        // --- Fim da Lógica de Assinatura ---
+        // --- VERIFICAÇÃO PREMIUM ---
+        if (!$user->is_premium) {
+             // Pode também verificar a data de expiração: && ($user->premium_expires_at === null || $user->premium_expires_at->isPast())
+            Log::warning("Usuário não premium tentou acessar whoLikedMe", ['user_id' => $user->id]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Funcionalidade exclusiva para usuários Premium.',
+                'requires_premium' => true
+            ], 403); // 403 Forbidden
+        }
+        // --- FIM DA VERIFICAÇÃO ---
 
-        // IDs dos usuários que o usuário logado já deu like ou dislike
-        $myInteractions = $user->initiatedInteractions()
-                              ->whereIn('type', [Interaction::TYPE_LIKE, Interaction::TYPE_DISLIKE])
-                              ->pluck('interacted_user_id');
+        // IDs dos usuários com quem eu já tive um match
+        $myMatchesUserIds = UserMatch::where('user_one_id', $user->id)->pluck('user_two_id')
+                                    ->merge(UserMatch::where('user_two_id', $user->id)->pluck('user_one_id'))
+                                    ->unique();
 
-        // Buscar IDs de quem deu like no usuário logado,
-        // excluindo aqueles com quem o usuário logado já interagiu (like/dislike)
-        $likerIds = Interaction::where('interacted_user_id', $user->id)
-                               ->where('type', Interaction::TYPE_LIKE)
-                               ->whereNotIn('user_id', $myInteractions) // Exclui quem eu já interagi
-                               ->pluck('user_id');
+        // Buscar IDs de quem deu like em mim,
+        // excluindo aqueles que já são matches.
+        // (Não precisa excluir quem eu já dei like/dislike, pois o objetivo é ver quem ME curtiu)
+        $likerIds = Interaction::where('interacted_user_id', $user->id) // Quem recebeu fui eu
+                               ->where('type', Interaction::TYPE_LIKE)    // A interação foi um like
+                               ->whereNotIn('user_id', $myMatchesUserIds) // Exclui quem já é match
+                               ->pluck('user_id'); // Pega o ID de quem deu o like
 
-        // Buscar os usuários correspondentes
-        // Limitar e paginar seria ideal em produção
-        $likers = User::whereIn('id', $likerIds)->limit(20)->get();
+        // Buscar os usuários (com paginação é ideal)
+        $likers = User::whereIn('id', $likerIds)
+                      ->with('photos') // Carregar fotos para exibir no frontend
+                      ->orderBy('created_at', 'desc') // Ordenar por quem curtiu mais recentemente?
+                      ->paginate(15); // Exemplo de paginação
 
-        // Retorna os usuários usando o UserResource
+        // Retorna a coleção paginada de usuários
         return UserResource::collection($likers);
     }
 }
