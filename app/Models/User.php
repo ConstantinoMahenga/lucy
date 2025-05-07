@@ -9,6 +9,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use App\Models\Interest; 
 
 
+
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Models\Conversation; // Importar
+use App\Models\Message; 
+
 class User extends Authenticatable
 {
     use HasApiTokens, Notifiable;
@@ -65,5 +70,16 @@ public function interests(): BelongsToMany
     // Opcional: ->withTimestamps() se a tabela pivot tiver timestamps
     return $this->belongsToMany(Interest::class, 'interest_user');
 }
+
+
+public function conversations(): BelongsToMany
+    {
+        return $this->belongsToMany(Conversation::class, 'conversation_user')
+                    ->withPivot('unread_count', 'last_read_at', 'is_muted', 'is_archived');
+    }
+    public function sentMessages(): HasMany
+    {
+        return $this->hasMany(Message::class, 'sender_id');
+    }
 
 }

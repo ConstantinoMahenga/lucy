@@ -167,4 +167,9 @@ classDiagram
     SubscriptionController ..> User
 
 
-   "43|7lIMONUKzwaH1njG3tyWKP8dJajrSfd0QPkOoQgmd6490aec"
+joana
+4|1IVeSb3j8p5DcxJ8ILgH9d8gPtFUCUMaEeROLxfE28963bab
+
+
+joao
+5|kDluZgATUH7yWY9xj0qLNHMaP5oNJhFPXSvHMI7scda7f014
